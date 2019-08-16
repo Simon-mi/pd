@@ -83,3 +83,153 @@
 ## 后续
 
 现阶段我们先实现上面所述的四个方案，后续我们将根据进度和时间的安排，考虑怎样在策略执行后保持状态的问题以及控制器的相关问题。
+
+# 功能测试
+
+* 我们小组配置环境是：在一个物理机上起了一个PD、五个TIKV、一个TIDB
+* 我们主要实现的是scheduler相关在scheduler下新加了t_add的子命令，在其下，分别是我们增加的功能：
+
+![1](https://graph.baidu.com/resource/11179cbac01f3d1ab092a01565676786.jpg)
+
+
+## 1. transfer-region-to-label
+* 将指定的region挪到指定的label
+### 用法：
+
+![2](https://graph.baidu.com/resource/1110b08a59e4738293fe101565677208.jpg)
+
+### 示例：
+* 将region24，转移到label zone s1上
+![3](https://graph.baidu.com/resource/111b4fab5d74928e0025501565677324.jpg)
+
+* 添加scheduler成功
+![4](https://graph.baidu.com/resource/111a1d11fe547154e681c01565677351.jpg)
+
+* 若再次执行，程序会检查出该scheduler已存在，拒绝重复添加
+![5](https://graph.baidu.com/resource/111afb1988a8bc7f08c5601565677404.jpg)
+
+* 转移成功后的region24的一个peer已经转移到了label s1上
+![6](https://graph.baidu.com/resource/111d449c5d7228c4cebdc01565677534.jpg)
+
+* 当前已经没有任何scheduler，因此保证了确实是transfer-region-to-label将region24进行了迁移。
+![7](https://graph.baidu.com/resource/111b6ddb0027299d413b701565677583.jpg)
+
+* 上述操作后添加了一个scheduler
+![8](https://graph.baidu.com/resource/111444b02b0326400104601565677695.jpg)
+
+
+**transfer-region-to-label是我们所有scheduler调度的基础，后续每一个scheduler的添加到最后都会产生transfer-region-to-label操作，进而对label进行迁移**
+## 2. transfer-region-to-store
+* 迁移前的region17：
+![9](https://graph.baidu.com/resource/1118599a13f5677f9612a01565677803.jpg)
+
+* 添加scheduler，将region17的一个peer转移到store 5上
+![10](https://graph.baidu.com/resource/1118387a57a29e6e228d701565677857.jpg)
+
+* 迁移后的region17
+![11](https://graph.baidu.com/resource/1117fe7eb5921ae7927b301565677898.jpg)
+
+
+## 3. transfer-regions-of-label-to-label
+### 作用：
+* 将一个label下的的所有region转移到另一个label下。         
+* 如果target label对应的store不止一个，则将source label下的region都转移过去；如果target label的store超过三个，则选择最优的三个进行迁移          
+* 我们给出的示例中，每个label只对应一个store，所以转移时只转移region的一个peer        
+* 若target label下已有source label下region的peer，则不迁移peer。
+### 用法：
+![12](https://graph.baidu.com/resource/11191b4a93d97a88b7fb701565677930.jpg)
+
+
+### 示例：
+* 看其中一个例子，region 43的副本之前在store6、store8、store5，它们的label分别s6、s8、s5
+![13](https://graph.baidu.com/resource/111bd873feb12cfe815c801565678043.jpg)
+
+
+* 将s6下的所有region转移到s1上，添加scheduler成功
+![14](https://graph.baidu.com/resource/11108dea26a6714807c8d01565678086.jpg)
+
+
+
+
+
+* 转移后region 43的副本就在store8、store5、store1上。
+![15](https://graph.baidu.com/resource/111a42cdb0a75098a5a4f01565678136.jpg)
+
+## 补充
+* 在t_add下的scheduler中，凡是写了regions的都是可以将source的region挪动到几个target label下的。          
+* 如果target label下有多个store，则可以挪一个region的多个副本到target label下。
+### 示例：
+* 当前label的K：zone，有两个V：s5、s6
+![24](https://graph.baidu.com/resource/11199ae1110e771fe5d3d01565678407.jpg)
+
+
+* label s5：store5、store8
+![25](https://graph.baidu.com/resource/111363e57e33dbe49e7cf01565678431.jpg)
+
+
+
+* label s6：store 1、store4、store6
+![26](https://graph.baidu.com/resource/111120d483b504ca9b54f01565678452.jpg)
+
+
+* 添加scheduler前：region65的peer的label都属于  
+label s6：（store 1、store 4、store 6）
+![27](https://graph.baidu.com/resource/111069f3b890b816c989f01565678477.jpg)
+
+
+* 添加./pd-ctl scheduler t_add transfer-regions-of-label-to-label-scheduler zone s6 zone s5，执行成功
+![28](https://graph.baidu.com/resource/11104ce773c72c5d78a7e01565678501.jpg)
+
+
+* 后续查看region65
+![29](https://graph.baidu.com/resource/111a13373493389d7287101565678524.jpg)
+
+
+* 添加scheduler后：region65的peer所属的label分别是：   
+label s5：（store 5、store 8）       
+label s6：（store 1）
+**之前label s5下没有region65的副本，且label s5下有两个store，因此transfer-regions-of-label-to-label-scheduler zone s6 zone s5会将label s6下面的region65的两个peer都移动到label s5下。**
+## 4. transfer-regions-of-keyrange-to-label-scheduler
+### 作用：
+* 输入start key值以及start key之后几个range，并将其转移到指定的label下
+### 用法：
+![16](https://graph.baidu.com/resource/111fa39be3fde3322fccb01565678167.jpg)
+
+
+### 示例：
+* region42如图所示：
+![17](https://graph.baidu.com/resource/111507df9454966201f3b01565701968.jpg)
+
+
+* 添加scheduler成功，其中limit为从start key开始后的15个region。
+*  由于./pd-ctl scheduler t_add transfer-regions-of-keyrange-to-label-scheduler 的执行，因此直接导致添加了很多迁移到s8的scheduler。
+
+![18](https://graph.baidu.com/resource/11119a1855286c5af1e4a01565701986.jpg)
+
+
+* 转移后的region42
+![19](https://graph.baidu.com/resource/111c4ed369932bf5a3d7c01565701876.jpg)
+
+
+
+
+
+## 5. transfer-table-to-label
+* 转移前的region14：
+![21](https://graph.baidu.com/resource/111e016976827a56689d201565702181.jpg)
+
+
+
+* 添加scheduler：./pd-ctl scheduler t_add transfer-table-to-label mysql user zone s8后，其中user是系统表，现在只添加了一个scheduler到scheduler列表中，是因为当前user表还没有数据，因此只在一个region中。
+![22](https://graph.baidu.com/resource/11166908b458a098e2b7801565702232.jpg)
+
+
+* 转移后的region14
+![23](https://graph.baidu.com/resource/11163e63bc8ac60332b1901565702213.jpg)
+
+
+
+
+
+
+
